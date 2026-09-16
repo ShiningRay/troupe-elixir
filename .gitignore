@@ -1,0 +1,15 @@
+# Mix
+/_build
+/deps
+/doc
+*.ez
+
+# Troupe runtime data
+/.troupe
+
+# Elixir/BEAM
+*.beam
+erl_crash.dump
+
+# OS
+.DS_Store
