@@ -108,6 +108,8 @@ CLI：`mix troupe.status --node a@host`、`mix troupe.ps`、`mix troupe.inspect 
 * [docs/concepts.md](docs/concepts.md) —— 核心概念与契约
 * [docs/api-reference.md](docs/api-reference.md) —— API 参考
 * [docs/operations.md](docs/operations.md) —— 部署与运维
+* [docs/ORLEANS_GAP.md](docs/ORLEANS_GAP.md) / [ROADMAP](docs/ROADMAP.md) —— Orleans 对标差距、生产门禁与 Issues
+* [docs/VERIFICATION.md](docs/VERIFICATION.md) —— 当前测试结果与未验证边界
 * [docs/patterns.md](docs/patterns.md) —— 模式与配方（秒杀/延时任务/Show 广播）
 
 ## 安装
