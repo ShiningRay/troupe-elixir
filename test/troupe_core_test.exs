@@ -173,8 +173,27 @@ defmodule Troupe.CoreTest do
     Troupe.call!(cart, :add, ["x"])
     Troupe.call!(cart, :peek, [])
 
-    events = Troupe.traces(troupe, 10, role_id: "Cart")
-    assert length(events) >= 2
+    # Trace 经消息驱动落环（异步），慢 runner 上立即读取可能只有 1 条——等待到齐
+    wait_trace_count = fn want ->
+      deadline = System.monotonic_time(:millisecond) + 3_000
+
+      repeat = fn repeat ->
+        n = troupe |> Troupe.traces(10, role_id: "Cart") |> length()
+
+        cond do
+          n >= want -> n
+          System.monotonic_time(:millisecond) >= deadline -> n
+          true ->
+            Process.sleep(50)
+            repeat.(repeat)
+        end
+      end
+
+      repeat.(repeat)
+    end
+
+    events = troupe |> Troupe.traces(10, role_id: "Cart")
+    assert length(events) >= 2, "trace events: #{length(events)}"
     # 最新在前
     assert %{method: :peek, outcome: :ok} = hd(events)
     assert Enum.any?(events, &(&1.method == :add and &1.outcome == :ok))

@@ -36,7 +36,17 @@ if System.get_env("TROUPE_TEST_PG") do
     end
 
     setup do
-      {:ok, conn} = Postgrex.start_link(hostname: "127.0.0.1", port: 55444, username: "troupe", password: "troupe", database: "troupe_rb_test")
+      uri = URI.parse(@url)
+      userinfo = String.split(uri.userinfo || "postgres:", ":", parts: 2)
+
+      {:ok, conn} =
+        Postgrex.start_link(
+          hostname: uri.host || "127.0.0.1",
+          port: uri.port || 5432,
+          username: Enum.at(userinfo, 0) || "postgres",
+          password: Enum.at(userinfo, 1),
+          database: String.trim_leading(uri.path || "/postgres", "/")
+        )
 
       store = %{conn: conn, opts: []}
       Troupe.PropStore.Postgres.ensure_schema(store)
