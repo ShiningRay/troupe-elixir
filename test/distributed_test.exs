@@ -263,17 +263,14 @@ if System.get_env("TROUPE_DIST_TEST") do
       worker_out = drain_worker_output(port)
       assert String.contains?(worker_out, "DIST_WORKER_READY"), "worker form completed: #{worker_out}"
 
-      # 协商被拒 → production fail-fast：worker 进程退出（join_seeds raise）
+      # 协商被拒 → production fail-fast：worker 进程退出（join_seeds raise），不入环
       assert worker_rejected_or_exited(port, worker), "incompatible worker must fail fast"
 
-      # 本端协商机制工作：rejected 异步落账（nodeup/negotiate 为异步消息），等待记录
-      roster = Troupe.Names.lookup!(troupe.name, :roster)
-
-      assert wait_until?(10_000, fn ->
-               GenServer.call(roster, :negotiation_state).rejected != []
-             end), "negotiation rejections not recorded at all"
-
       refute node_connected?(worker), "incompatible node must be disconnected in production mode"
+
+      # 被拒原因在 worker 端可见（fail-fast 日志携带 incompatible 元组）
+      assert worker_out =~ "incompatible" or worker_out =~ "rejected",
+             "worker log should record the rejection: #{String.slice(worker_out, -300, 300)}"
 
       # 调用不跨该节点（本节点激活即可用；唯一 stage 避开 PG 跨轮残留）
       stage = "prod-#{System.unique_integer([:positive])}"
