@@ -1,0 +1,100 @@
+# Troupe for Elixir CI：
+# * 矩阵：Elixir 1.15/1.17/1.18 × ubuntu/windows（单机套件，零依赖）
+# * PG leg（必跑）：真实 PostgreSQL——Provider 契约/fencing/接管/Cue 重投（skip 即失败纪律）
+# * 分布式 leg（必跑）：真实双 BEAM 节点——透明路由/production 协商拒绝/死亡重激活
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: elixir-${{ matrix.elixir }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        elixir: ["1.15", "1.17", "1.18"]
+        include:
+          - os: windows-latest
+            elixir: "1.18"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.os == 'windows-latest' && '27' || '27' }}
+      - name: Compile (warnings are errors)
+        run: mix compile --warnings-as-errors
+      - name: Run test suite
+        run: mix test
+
+  pg:
+    name: postgresql / fencing & takeover（必跑 leg）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: troupe
+          POSTGRES_PASSWORD: troupe
+          POSTGRES_DB: troupe_ex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U troupe"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TROUPE_TEST_PG: postgres://troupe:troupe@127.0.0.1:5432/troupe_ex_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+      # skip 即失败纪律：PG leg 必须真正执行 PG 测试，环境缺失即红
+      - name: PG leg gate (skip is failure)
+        run: |
+          test -n "$TROUPE_TEST_PG" || { echo 'skip 即失败：TROUPE_TEST_PG 未设置'; exit 1; }
+          pg_isready -h 127.0.0.1 -U troupe || exit 1
+      - name: Run test suite (with real PostgreSQL)
+        run: mix test
+
+  dist:
+    name: distributed / 2 real BEAM nodes（必跑 leg）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: troupe
+          POSTGRES_PASSWORD: troupe
+          POSTGRES_DB: troupe_ex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U troupe"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TROUPE_TEST_PG: postgres://troupe:troupe@127.0.0.1:5432/troupe_ex_test
+      TROUPE_DIST_TEST: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+      # skip 即失败纪律：分布式 leg 必须真正执行双节点测试
+      - name: Distributed leg gate (skip is failure)
+        run: |
+          test "$TROUPE_DIST_TEST" = "1" || { echo 'skip 即失败：TROUPE_DIST_TEST 未设置'; exit 1; }
+          test -n "$TROUPE_TEST_PG" || { echo 'skip 即失败：TROUPE_TEST_PG 未设置'; exit 1; }
+      - name: Run test suite (distributed + PG)
+        run: mix test

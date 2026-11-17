@@ -7,7 +7,9 @@ defmodule Troupe.PropStore do
 
   ## 合同（Provider 必须遵守）
 
-  * `create/4` 仅当记录不存在时成功（原子）；已存在返回 `{:error, {:conflict, :exists}}`
+  * `create/5` 仅当记录不存在时成功（原子）；已存在返回 `{:error, {:conflict, :exists}}`；
+    `opts[:fencing_token]`（取得所有权后的 epoch）——共享 Provider 以其为初始 epoch，
+    本地实现接受但忽略
   * `write/4` 仅当当前 `revision == expected_revision` 时写入（CAS 原子）；
     冲突返回 `{:error, {:conflict, :revision}}`，成功返回新 revision
   * 写结果不确定（超时）时，调用方以 `read/2` 校验实际 revision 后决定，不盲目重写
@@ -35,13 +37,25 @@ defmodule Troupe.PropStore do
   @type kind :: :memory | :file | :dets | {module(), term()}
 
   @callback read(ctx, key) :: {:ok, stored() | nil} | {:error, term()}
-  @callback create(ctx, key, props :: map(), schema_version :: pos_integer()) ::
+
+  @callback create(ctx, key, props :: map(), schema_version :: pos_integer(), opts :: keyword()) ::
               {:ok, stored()} | {:error, {:conflict, :exists}} | {:error, term()}
   @callback write(ctx, key, props :: map(), opts :: keyword()) ::
               {:ok, stored()} | {:error, {:conflict, :revision}} | {:error, term()}
   @callback delete(ctx, key) :: :ok | {:error, term()}
 
-  @doc "为内置实现生成监督树子进程（自定义 {module, opts} 返回 nil，ctx 在 form 期由 init/1 构建）。"
+  # 可选能力声明：跨节点共享担保（多副本可读写 + 单写者可由存储裁决）。
+  @callback cross_node_safe :: boolean()
+  # 未声明视为 false——production 集群模式据此拒绝仅节点级的 Provider。
+  @optional_callbacks cross_node_safe: 0
+
+  @doc "Provider 是否提供节点级共享担保（默认 false）。"
+  @spec cross_node_safe?(module()) :: boolean()
+  def cross_node_safe?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :cross_node_safe, 0) and module.cross_node_safe()
+  end
+
+  @doc "为内置实现生成监督树子进程；自定义 {module, opts} 若导出 child_spec/2 则委托，否则 nil。"
   @spec child_spec(kind(), keyword(), atom()) :: Supervisor.child_spec() | nil
   def child_spec(:memory, _opts, troupe_name) do
     %{
@@ -68,7 +82,16 @@ defmodule Troupe.PropStore do
     }
   end
 
-  def child_spec({module, _opts}, _opts2, _troupe_name) when is_atom(module), do: nil
+  def child_spec({module, opts}, _opts2, troupe_name) when is_atom(module) do
+    if function_exported?(module, :child_spec, 2), do: module.child_spec(opts, troupe_name), else: nil
+  end
+
+  @doc "kind → Provider 模块（共享 Provider 即 {module, _opts} 的 module）。"
+  @spec module_of(kind()) :: module()
+  def module_of(:memory), do: Troupe.PropStore.Memory
+  def module_of(:file), do: Troupe.PropStore.File
+  def module_of(:dets), do: Troupe.PropStore.Dets
+  def module_of({mod, _opts}) when is_atom(mod), do: mod
 
   @doc "troupe 组建完成后解析出行为实现句柄。"
   @spec resolve(kind(), atom()) :: {module(), ctx}
@@ -83,8 +106,14 @@ defmodule Troupe.PropStore do
   def resolve(:dets, troupe_name),
     do: {Troupe.PropStore.Dets, %{server: Troupe.Names.lookup!(troupe_name, :prop_store)}}
 
-  def resolve({module, opts}, _troupe_name) when is_atom(module),
-    do: {module, module.init(opts)}
+  def resolve({module, opts}, troupe_name) when is_atom(module) do
+    # init/2（可传 troupe_name 查找监督树内连接，如 Postgres）优先于 init/1
+    if function_exported?(module, :init, 2) do
+      {module, module.init(opts, troupe_name)}
+    else
+      {module, module.init(opts)}
+    end
+  end
 end
 
 defmodule Troupe.PropStore.Memory do
@@ -142,7 +171,7 @@ defmodule Troupe.PropStore.Memory do
   end
 
   @impl true
-  def create(%{table: table}, key, props, sv) do
+  def create(%{table: table}, key, props, sv, _opts) do
     if :ets.insert_new(table, {key, props, 1, sv}) do
       {:ok, %{props: props, revision: 1, schema_version: sv}}
     else
@@ -174,6 +203,9 @@ defmodule Troupe.PropStore.Memory do
     :ets.delete(table, key)
     :ok
   end
+
+  @impl true
+  def cross_node_safe, do: false
 end
 
 defmodule Troupe.PropStore.File.Server do
@@ -199,7 +231,7 @@ defmodule Troupe.PropStore.File.Server do
     {:reply, lookup(st, key), st}
   end
 
-  def handle_call({:create, key, props, sv}, _from, st) do
+  def handle_call({:create, key, props, sv, _opts}, _from, st) do
     case lookup(st, key) do
       {:ok, nil} ->
         store(st, key, props, 1, sv)
@@ -286,13 +318,16 @@ defmodule Troupe.PropStore.File do
   def read(%{server: pid}, key), do: GenServer.call(pid, {:read, key})
 
   @impl true
-  def create(%{server: pid}, key, props, sv), do: GenServer.call(pid, {:create, key, props, sv})
+  def create(%{server: pid}, key, props, sv, opts), do: GenServer.call(pid, {:create, key, props, sv, opts})
 
   @impl true
   def write(%{server: pid}, key, props, opts), do: GenServer.call(pid, {:write, key, props, opts})
 
   @impl true
   def delete(%{server: pid}, key), do: GenServer.call(pid, {:delete, key})
+
+  @impl true
+  def cross_node_safe, do: false
 end
 
 defmodule Troupe.PropStore.Dets.Server do
@@ -329,7 +364,7 @@ defmodule Troupe.PropStore.Dets.Server do
     {:reply, lookup(st.tid, key), st}
   end
 
-  def handle_call({:create, key, props, sv}, _from, st) do
+  def handle_call({:create, key, props, sv, _opts}, _from, st) do
     if :dets.insert_new(st.tid, {key, props, 1, sv}) do
       :dets.sync(st.tid)
       {:reply, {:ok, %{props: props, revision: 1, schema_version: sv}}, st}
@@ -391,11 +426,14 @@ defmodule Troupe.PropStore.Dets do
   def read(%{server: pid}, key), do: GenServer.call(pid, {:read, key})
 
   @impl true
-  def create(%{server: pid}, key, props, sv), do: GenServer.call(pid, {:create, key, props, sv})
+  def create(%{server: pid}, key, props, sv, opts), do: GenServer.call(pid, {:create, key, props, sv, opts})
 
   @impl true
   def write(%{server: pid}, key, props, opts), do: GenServer.call(pid, {:write, key, props, opts})
 
   @impl true
   def delete(%{server: pid}, key), do: GenServer.call(pid, {:delete, key})
+
+  @impl true
+  def cross_node_safe, do: false
 end

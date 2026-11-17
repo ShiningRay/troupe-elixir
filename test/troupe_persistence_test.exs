@@ -34,7 +34,7 @@ defmodule Troupe.PersistenceTest do
     end
 
     @impl true
-    def create(table, key, props, sv) do
+    def create(table, key, props, sv, _opts) do
       if :ets.insert_new(table, {key, props, 1, sv}) do
         {:ok, %{props: props, revision: 1, schema_version: sv}}
       else
@@ -128,7 +128,7 @@ defmodule Troupe.PersistenceTest do
 
     # 直接写入 v1 状态
     {store_mod, store_ctx} = troupe.store
-    {:ok, _} = store_mod.create(store_ctx, {"default", "Migrator", "mig-1"}, %{names: ["a", "b"]}, 1)
+    {:ok, _} = store_mod.create(store_ctx, {"default", "Migrator", "mig-1"}, %{names: ["a", "b"]}, 1, [])
 
     Troupe.TestSink.register("mig-1", self())
     mig = Troupe.cast(troupe, TestActors.Migrator, "mig-1")

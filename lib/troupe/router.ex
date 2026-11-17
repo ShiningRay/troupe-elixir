@@ -96,12 +96,16 @@ defmodule Troupe.Router do
         hops
       ])
     catch
+      # 连接断开/节点下线/目标端异常：结果未知（勿假定失败）
       :exit, {:erpc, reason} ->
-        # 连接断开/节点下线：结果未知（勿假定失败）
         {:error, unknown(agent, fun, reason)}
 
       :error, {:erpc, reason} ->
         {:error, unknown(agent, fun, reason)}
+
+      kind, reason ->
+        # erpc 把远端 raise 的异常在本地重放——对调用方同样是"结果未知"
+        {:error, unknown(agent, fun, {kind, reason})}
     end
   end
 

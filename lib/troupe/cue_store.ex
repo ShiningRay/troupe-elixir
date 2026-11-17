@@ -63,32 +63,46 @@ defmodule Troupe.CueStore do
   def terminate(_reason, %{tid: tid}), do: :dets.close(tid)
 
   # -- API ------------------------------------------------------------------
+  # 门面按 ctx 形态分发：%{server: pid} → 本地 GenServer 驱动；
+  # %{impl: module} → 共享驱动（Postgres 等）实现同名函数。
 
   @doc "安排/重排提醒（幂等 upsert）。spec: `{:at, ts}` | `{:every, ms}`；payload 须可序列化。"
   @spec upsert(ctx, key, String.t(), term(), {:at, integer()} | {:every, non_neg_integer()}, integer()) ::
           :ok
-  def upsert(ctx, key, name, payload, spec, next_due),
-    do: GenServer.call(ctx.server, {:upsert, key, name, payload, spec, next_due})
+  def upsert(%{server: pid}, key, name, payload, spec, next_due),
+    do: GenServer.call(pid, {:upsert, key, name, payload, spec, next_due})
 
-  @doc "到期查询（limit 截断）。"
+  def upsert(%{impl: mod} = ctx, key, name, payload, spec, next_due),
+    do: mod.upsert(ctx, key, name, payload, spec, next_due)
+
+  @doc "到期查询（limit 截断）。共享驱动以**数据库时钟**为准（now 参数仅本地驱动使用）。"
   @spec due(ctx, integer(), non_neg_integer()) :: [t()]
-  def due(ctx, now, limit), do: GenServer.call(ctx.server, {:due, now, limit})
+  def due(%{server: pid}, now, limit), do: GenServer.call(pid, {:due, now, limit})
+
+  def due(%{impl: mod} = ctx, now, limit), do: mod.due(ctx, now, limit)
 
   @doc "原子认领（租约）。返回认领后的 statusVersion（complete/4 需携带）；已被他人持有时 `{:error, :stolen}`。"
   @spec claim(ctx, String.t(), term(), non_neg_integer()) :: {:ok, non_neg_integer()} | {:error, :stolen}
-  def claim(ctx, id, owner, lease_ms), do: GenServer.call(ctx.server, {:claim, id, owner, lease_ms})
+  def claim(%{server: pid}, id, owner, lease_ms), do: GenServer.call(pid, {:claim, id, owner, lease_ms})
+
+  def claim(%{impl: mod} = ctx, id, owner, lease_ms), do: mod.claim(ctx, id, owner, lease_ms)
 
   @doc "完成确认：`next_due` 为下次到期，或 `:done`（移除）。CAS 以 statusVersion 裁决。"
   @spec complete(ctx, String.t(), non_neg_integer(), integer() | :done) :: :ok | {:error, :stale}
-  def complete(ctx, id, sv, next_due), do: GenServer.call(ctx.server, {:complete, id, sv, next_due})
+  def complete(%{server: pid}, id, sv, next_due), do: GenServer.call(pid, {:complete, id, sv, next_due})
+
+  def complete(%{impl: mod} = ctx, id, sv, next_due), do: mod.complete(ctx, id, sv, next_due)
 
   @doc "注销提醒（下场/显式取消）。"
   @spec cancel(ctx, key, String.t()) :: :ok
-  def cancel(ctx, key, name), do: GenServer.call(ctx.server, {:cancel, key, name})
+  def cancel(%{server: pid}, key, name), do: GenServer.call(pid, {:cancel, key, name})
+
+  def cancel(%{impl: mod} = ctx, key, name), do: mod.cancel(ctx, key, name)
 
   @doc "全量列表（Director / CLI）。"
   @spec list(ctx) :: [t()]
-  def list(ctx), do: GenServer.call(ctx.server, :list)
+  def list(%{server: pid}), do: GenServer.call(pid, :list)
+  def list(%{impl: mod} = ctx), do: mod.list(ctx)
 
   # -- GenServer -------------------------------------------------------------
 

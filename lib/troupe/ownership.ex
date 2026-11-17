@@ -24,6 +24,16 @@ defmodule Troupe.Ownership do
   @callback renew(ctx, key, owner :: term(), epoch :: pos_integer(), lease_ms :: non_neg_integer()) ::
               :ok | {:error, :lost}
   @callback release(ctx, key, owner :: term(), epoch :: pos_integer()) :: :ok
+
+  # 可选能力声明：跨节点仲裁（production 单激活证明的前提）。
+  @callback cross_node_safe :: boolean()
+  @optional_callbacks cross_node_safe: 0
+
+  @doc "Provider 是否提供跨节点单激活仲裁（默认 false）。"
+  @spec cross_node_safe?(module()) :: boolean()
+  def cross_node_safe?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :cross_node_safe, 0) and module.cross_node_safe()
+  end
 end
 
 defmodule Troupe.Ownership.Memory do
@@ -96,4 +106,7 @@ defmodule Troupe.Ownership.Memory do
       _ -> {:reply, :ok, st}
     end
   end
+
+  @impl true
+  def cross_node_safe, do: false
 end

@@ -85,7 +85,29 @@ TROUPE_SEEDS=a@127.0.0.1 elixir --sname b@127.0.0.1 -S mix
 ```
 
 放置 = 一致性哈希环（`phash2`，160 虚拟节点/节点），无目录、无注册；
-漂移期误投经 erpc 转发（跳数上限 2）。
+漂移期误投经 erpc 转发（跳数上限 2）。入团时节点交换 manifest（协议/namespace/角色集合）：
+**production 模式不兼容即 fail-fast 断连**，dev 记录拒绝、保持实验语义。
+
+## 生产共享存储（PostgreSQL）
+
+多节点生产必须用共享存储 Provider（节点级持久不等于跨节点单激活）：
+
+```elixir
+{:ok, troupe} =
+  Troupe.form(
+    actors: [MyApp.CartActor],
+    store: {Troupe.PropStore.Postgres, [url: "postgres://troupe:troupe@db:5432/mydb"]},
+    ownership: true,                  # 与 Props 同库：epoch 墓碑 + DB 时钟租约
+    cues: [provider: :store],         # 共享 reminders（SKIP LOCKED 认领、至少一次）
+    cluster: [seeds: [:"a@host"], mode: :production]
+  )
+```
+
+* Props 写 = 单语句 `UPDATE … WHERE` 原子 CAS + fencing（旧 epoch 一律拒绝，
+  fencing 优先于 CAS 诊断）；迁移写同契约
+* 所有权 = epoch 单调、同 owner 重入不涨、release 留墓碑、租约判定用**数据库时钟**
+* production 集群模式有**能力门禁**：非 cross-node-safe 的 store/ownership 直接拒绝组建
+* Provider 需要 `postgrex`/`jason`（用户应用侧提供；troupe 包本身零依赖）
 
 ## 可观测
 
@@ -124,6 +146,6 @@ end
 
 ## 状态
 
-v0.1.0：核心运行时（虚拟激活、严格串行、交错执行、生命周期、持久化、Cue/提醒、Show、Director/CLI）与设计契约已实现并有测试覆盖（37 例）。多节点共享存储 PropStore（Postgres/Redis，承载所有权 fencing）为下一里程碑；无协调模式下的多节点集群定位为实验性。
+v0.1.0：核心运行时（虚拟激活、严格串行、交错执行、生命周期、持久化、Cue/提醒、Show、Director/CLI）与设计契约已实现并有测试覆盖（47 例，含真实 PostgreSQL 与双 BEAM 节点）。Issues #1–#3 已闭环：所有权先于一切共享写（fencing 贯穿 create/migrate/save）、Roster 入团协商 + production 能力门禁、PostgreSQL Provider（Props/Ownership/Cue 同库、DB 时钟租约、SKIP LOCKED 重投）。Redis/etcd Provider、持久流、OTel 接线见 [ROADMAP](docs/ROADMAP.md)。
 
 License: Apache-2.0

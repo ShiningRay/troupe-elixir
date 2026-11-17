@@ -127,13 +127,13 @@ defmodule Troupe.Director do
     end
   end
 
-  @doc "集群聚合的在场 Actor 列表。"
+  @doc "集群聚合的在场 Actor 列表；不可达/无此 troupe 的节点跳过（不毁整个聚合视图）。"
   def cluster_actors(troupe_name, filter \\ []) do
-    for n <- troupe_cluster(troupe_name), {:ok, list} = rpc(n, troupe_name, :actors, [filter]), a <- list do
+    for n <- troupe_cluster(troupe_name),
+        {:ok, list} <- [rpc(n, troupe_name, :actors, [filter])],
+        a <- list do
       a
     end
-  rescue
-    _ -> []
   end
 
   @doc "Actor 详情（含 Props 快照）——路由到归属 Stage。"
@@ -279,7 +279,8 @@ defmodule Troupe.Director do
       catch
         :exit, {:erpc, reason} -> {:error, reason}
         :error, {:erpc, reason} -> {:error, reason}
-        :exit, reason -> {:error, reason}
+        # erpc 会把远端 raise 的异常在本地重放（ErlangError 等）——聚合视图按不可达处理
+        kind, reason -> {:error, {kind, reason}}
       end
     end
   end

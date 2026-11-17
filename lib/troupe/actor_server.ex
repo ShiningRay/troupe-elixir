@@ -113,35 +113,55 @@ defmodule Troupe.ActorServer do
   end
 
   # ==========================================================================
-  # 激活：加载 Props → 迁移 → 校验 → 所有权 → on_stage
+  # 激活：取得所有权 → 读取/创建/迁移（全部携 fencing）→ 校验 → on_stage
+  # （Issue #1：所有权先于任何共享状态写入；失败释放租约，不留半迁移状态）
   # ==========================================================================
 
   defp activate(%__MODULE__{} = s) do
     {store_mod, store_ctx} = s.troupe.store
 
-    with {:ok, s, props, revision, sv} <- load(store_mod, store_ctx, s),
-         {:ok, s} <- acquire_ownership(s),
-         {:ok, props, effects} <- run_on_stage(s, props) do
-      s =
-        %__MODULE__{
-          s
-          | lifecycle: :running,
-            props: props,
-            revision: revision,
-            schema_version: sv,
-            invalid_reason: nil,
-            last_activity: Time.now_ms()
-        }
+    result =
+      try do
+        with {:ok, s} <- acquire_ownership(s),
+             {:ok, s, props, revision, sv} <- load(store_mod, store_ctx, s),
+             {:ok, props, effects} <- run_on_stage(s, props) do
+          s =
+            %__MODULE__{
+              s
+              | lifecycle: :running,
+                props: props,
+                revision: revision,
+                schema_version: sv,
+                invalid_reason: nil,
+                last_activity: Time.now_ms()
+            }
 
-      s = schedule_intermission(s)
-      s = schedule_cues(s)
-      s = schedule_ownership_renewal(s)
-      process_effects(s, effects)
-      {:ok, s}
+          {:ok, s, effects}
+        else
+          {:error, reason, %__MODULE__{} = s2} -> {:error, reason, s2}
+        end
+      catch
+        :throw, {:activation_error, reason, %__MODULE__{} = s2} -> {:error, reason, s2}
+      end
+
+    case result do
+      {:ok, s, effects} -> finish_activate(s, effects)
+      {:error, reason, s2} ->
+        # 释放租约（未取得时为无害 no-op）；迁移/创建写为原子单条，失败即未发生
+        release_ownership(s2)
+        {:error, reason, s2}
     end
   end
 
-  # load 可能 throw {:activation_error, reason, s}
+  defp finish_activate(s, effects) do
+    s = schedule_intermission(s)
+    s = schedule_cues(s)
+    s = schedule_ownership_renewal(s)
+    process_effects(s, effects)
+    {:ok, s}
+  end
+
+  # 读取可能 throw {:activation_error, reason, s}（由 activate 统一接住）
   defp load(store_mod, store_ctx, %__MODULE__{} = s) do
     case store_mod.read(store_ctx, s.key) do
       {:ok, nil} ->
@@ -151,7 +171,7 @@ defmodule Troupe.ActorServer do
           throw_activation(s, "initial_props must return a map, got: #{inspect(props)}")
         end
 
-        case store_mod.create(store_ctx, s.key, props, s.module.__troupe_schema_version__()) do
+        case store_mod.create(store_ctx, s.key, props, s.module.__troupe_schema_version__(), fencing_opts(s)) do
           {:ok, stored} ->
             {:ok, s, stored.props, stored.revision, stored.schema_version}
 
@@ -169,8 +189,6 @@ defmodule Troupe.ActorServer do
       {:error, cause} ->
         store_failure(s, "read", cause)
     end
-  catch
-    :throw, {:activation_error, reason, s2} -> {:error, reason, s2}
   end
 
   defp read_existing(store_mod, store_ctx, s) do
@@ -186,11 +204,8 @@ defmodule Troupe.ActorServer do
     with {:ok, props, sv} <- migrate(s, stored.props, stored.schema_version, target_sv),
          :ok <- validate(s, props) do
       if sv != stored.schema_version do
-        # 迁移产物立即落盘（以当前 revision CAS）
-        case store_mod.write(store_ctx, s.key, props,
-               expected_revision: stored.revision,
-               schema_version: sv
-             ) do
+        # 迁移产物立即落盘（revision CAS + fencing：未持有 epoch 的写被共享存储拒绝，Issue #1）
+        case store_mod.write(store_ctx, s.key, props, fencing_opts(s) ++ [expected_revision: stored.revision, schema_version: sv]) do
           {:ok, new_stored} ->
             {:ok, s, new_stored.props, new_stored.revision, new_stored.schema_version}
 
@@ -603,12 +618,8 @@ defmodule Troupe.ActorServer do
   defp commit(%__MODULE__{} = s, props, true) do
     {store_mod, store_ctx} = s.troupe.store
 
-    opts = [
-      expected_revision: s.revision,
-      schema_version: s.module.__troupe_schema_version__()
-    ]
-
-    opts = if s.ownership_epoch, do: [fencing_token: s.ownership_epoch] ++ opts, else: opts
+    opts =
+      fencing_opts(s) ++ [expected_revision: s.revision, schema_version: s.module.__troupe_schema_version__()]
 
     case store_mod.write(store_ctx, s.key, props, opts) do
       {:ok, stored} ->
@@ -887,8 +898,7 @@ defmodule Troupe.ActorServer do
       if save? do
         {store_mod, store_ctx} = s.troupe.store
 
-        opts2 = [expected_revision: s.revision, schema_version: s.module.__troupe_schema_version__()]
-        opts2 = if s.ownership_epoch, do: [fencing_token: s.ownership_epoch] ++ opts2, else: opts2
+        opts2 = fencing_opts(s) ++ [expected_revision: s.revision, schema_version: s.module.__troupe_schema_version__()]
 
         case store_mod.write(store_ctx, s.key, props2, opts2) do
           {:ok, stored} -> %__MODULE__{s | props: stored.props, revision: stored.revision}
@@ -1081,6 +1091,13 @@ defmodule Troupe.ActorServer do
   end
 
   # -- 所有权（启用时） ----------------------------------------------------
+
+  # 所有共享状态写入统一携带 fencing token（epoch）：共享 Provider 拒绝旧 token，
+  # 本地实现接受但忽略（契约见 Troupe.PropStore）。
+  defp fencing_opts(%__MODULE__{ownership_epoch: epoch}) when is_integer(epoch),
+    do: [fencing_token: epoch]
+
+  defp fencing_opts(%__MODULE__{}), do: []
 
   defp acquire_ownership(%__MODULE__{} = s) do
     case s.troupe.ownership do

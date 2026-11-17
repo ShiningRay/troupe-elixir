@@ -78,6 +78,38 @@ defmodule Troupe do
     cues? = Keyword.get(opts, :cues, false) != false
     show? = Keyword.get(opts, :show, false) != false
 
+    production_cluster? = cluster_mode(config.cluster) == :production
+    store_mod = Troupe.PropStore.module_of(config.store)
+    {shared_own?, own_mod} = ownership_child(config)
+    cue_spec = if cues?, do: cue_spec(opts, config, name, store_mod), else: []
+
+    if production_cluster? do
+      # 能力门禁（Issue #2/#3）：production 集群拒绝无法提供节点级担保的组合
+      unless Troupe.PropStore.cross_node_safe?(store_mod) do
+        raise ArgumentError,
+              "production cluster mode requires a cross-node safe store " <>
+                "(e.g. {Troupe.PropStore.Postgres, [url: ...]}), got: #{inspect(config.store)}"
+      end
+
+      if config.ownership == nil do
+        raise ArgumentError,
+              "production cluster mode requires ownership (single-activation fencing), " <>
+                "enable with ownership: true"
+      end
+
+      unless Troupe.Ownership.cross_node_safe?(own_mod) do
+        raise ArgumentError,
+              "production cluster mode requires a cross-node safe ownership provider, " <>
+                "got: #{inspect(own_mod)} — use a shared store provider (Postgres)"
+      end
+    end
+
+    manifest = %{
+      protocol: Troupe.Roster.protocol(),
+      namespace: config.namespace,
+      roles: repertoire.by_role |> Map.keys() |> Enum.sort()
+    }
+
     children =
       ([
          Troupe.PropStore.child_spec(config.store, [props_dir: config.props_dir], name),
@@ -85,18 +117,13 @@ defmodule Troupe do
          {Task.Supervisor, name: Troupe.Names.via(name, :task_sup)},
          Troupe.Casting.child_spec(troupe_name: name)
        ] ++
-         maybe_child(cues?, fn ->
-           [
-             Troupe.CueStore.child_spec(troupe_name: name, mode: cue_mode(opts)),
-             Troupe.CueRunner.child_spec(troupe_name: name, tick_ms: config.cue_tick_ms)
-           ]
-         end) ++
+         cue_spec ++
          maybe_child(show?, fn -> [Troupe.Show.child_spec(troupe_name: name)] end) ++
-         maybe_child(config.ownership != nil, fn ->
+         maybe_child(config.ownership != nil and not shared_own?, fn ->
            [Troupe.Ownership.Memory.child_spec(troupe_name: name)]
          end) ++
          maybe_child(config.cluster != nil, fn ->
-           [Troupe.Roster.child_spec(troupe_name: name, cluster: config.cluster)]
+           [Troupe.Roster.child_spec(troupe_name: name, cluster: config.cluster, manifest: manifest)]
          end) ++
          [Troupe.Playbill.child_spec(troupe_name: name, cluster: config.cluster)] ++
          [Troupe.Director.child_spec(troupe_name: name)])
@@ -109,18 +136,31 @@ defmodule Troupe do
     # 运行时独立于组建者进程存活；停机走 Troupe.shutdown（显式、有序）
     Process.unlink(root)
 
+    store = Troupe.PropStore.resolve(config.store, name)
+
+    {own_module, own_ctx} =
+      if config.ownership do
+        if shared_own? do
+          {own_mod, store_mod.ownership_ctx(store)}
+        else
+          {Troupe.Ownership.Memory, Names.lookup!(name, :ownership)}
+        end
+      else
+        {nil, nil}
+      end
+
     troupe = %__MODULE__{
       name: name,
       root: root,
       config: config,
       repertoire: repertoire,
-      store: Troupe.PropStore.resolve(config.store, name),
-      cue_store: (cues? && %{server: Names.lookup!(name, :cue_store)}) || nil,
+      store: store,
+      cue_store: (cues? && cue_ctx(opts, config, store, name)) || nil,
       ownership:
         (config.ownership &&
            %{
-             module: Troupe.Ownership.Memory,
-             ctx: Names.lookup!(name, :ownership),
+             module: own_module,
+             ctx: own_ctx,
              lease_ms: Keyword.get(config.ownership, :lease_ms, 5_000)
            }) || nil,
       playbill: Names.lookup!(name, :playbill),
@@ -142,10 +182,55 @@ defmodule Troupe do
       else: raise(ArgumentError, "Troupe.form requires actors:")
   end
 
-  defp cue_mode(opts) do
+  defp cluster_mode(nil), do: nil
+  defp cluster_mode(cluster), do: Keyword.get(cluster, :mode, :dev)
+
+  # 所有权 Provider 解析：共享存储模块导出 ownership_module/0 时复用同一连接
+  # （同一事务/行锁模型，fencing 与 Props 写一致）；否则回退节点级 Memory。
+  defp ownership_child(config) do
+    store_mod = Troupe.PropStore.module_of(config.store)
+    Code.ensure_loaded?(store_mod)
+    shared? = config.ownership != nil and function_exported?(store_mod, :ownership_module, 0)
+    {shared?, (shared? && store_mod.ownership_module()) || Troupe.Ownership.Memory}
+  end
+
+  # cues: true | [persist: :memory | :dets] | [provider: :store] | [provider: {module, opts}]
+  defp cue_opts(opts) do
     case Keyword.get(opts, :cues) do
-      kw when is_list(kw) -> Keyword.get(kw, :persist, :memory)
-      _ -> :memory
+      kw when is_list(kw) -> kw
+      _ -> []
+    end
+  end
+
+  # 监督树子进程：本地模式含 CueStore GenServer；共享模式连接由 store / 自定义驱动承载
+  defp cue_spec(opts, config, name, store_mod) do
+    case cue_opts(opts)[:provider] do
+      nil ->
+        [
+          Troupe.CueStore.child_spec(troupe_name: name, mode: Keyword.get(cue_opts(opts), :persist, :memory)),
+          Troupe.CueRunner.child_spec(troupe_name: name, tick_ms: config.cue_tick_ms)
+        ]
+
+      :store ->
+        unless function_exported?(store_mod, :cue_ctx, 1) do
+          raise ArgumentError,
+                "cues provider :store requires a shared store with cue support " <>
+                  "(Postgres), got: #{inspect(config.store)}"
+        end
+
+        [Troupe.CueRunner.child_spec(troupe_name: name, tick_ms: config.cue_tick_ms)]
+
+      {mod, cue_opts} ->
+        base = if function_exported?(mod, :child_spec, 2), do: [mod.child_spec(cue_opts, name)], else: []
+        base ++ [Troupe.CueRunner.child_spec(troupe_name: name, tick_ms: config.cue_tick_ms)]
+    end
+  end
+
+  defp cue_ctx(opts, config, store, name) do
+    case cue_opts(opts)[:provider] do
+      nil -> %{server: Names.lookup!(name, :cue_store)}
+      :store -> Troupe.PropStore.module_of(config.store).cue_ctx(store)
+      {mod, cue_opts} -> mod.init(cue_opts)
     end
   end
 
