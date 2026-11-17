@@ -322,6 +322,15 @@ defmodule Troupe.ActorServer do
     {:reply, snapshot(s), s}
   end
 
+  # 协作取消（advisory，对齐 troupe.cr CancelSignal）：仅置位标志；Turn 内经
+  # `Troupe.Actor.cancel_requested?/0` 观察并自行决定收束，不可强行终止。
+  # 公共 API Troupe.cancel/1 直接写 :persistent_term 标志不经此信箱（在飞 strict
+  # Turn 会阻塞 GenServer 调用）；本分支留作管理面入口。settle（finish_turn）清除。
+  def handle_call(:troupe_cancel, _from, s) do
+    :persistent_term.put({__MODULE__, :cancel, s.troupe.name, s.role_id, s.stage_name}, true)
+    {:reply, :ok, s}
+  end
+
   def handle_call(:troupe_off, _from, %__MODULE__{} = s) do
     {:reply, :ok, begin_drain(s, force: s.shutting_down)}
   end
@@ -646,7 +655,7 @@ defmodule Troupe.ActorServer do
   end
 
   defp finish_turn(%__MODULE__{} = s) do
-    s = touch(s)
+    s = clear_cancel(touch(s))
 
     if s.lifecycle == :draining and ledger_idle?(s) do
       finish_drain(s)
@@ -1156,5 +1165,20 @@ defmodule Troupe.ActorServer do
   def terminate(_reason, s) do
     cancel_all_timers(s)
     :ok
+  end
+
+  # -- 协作取消（advisory，对齐 troupe.cr CancelSignal） --------------------
+  #
+  # 仅置位标志；Turn 内经 `Troupe.Actor.cancel_requested?/0` 观察并自行决定收束，
+  # 不可强行终止。标志存 :persistent_term（Turn 在本进程内联执行，GenServer.call
+  # 自身会死锁——公共 API Troupe.cancel/1 直接写标志不经信箱；本分支留作管理面入口）。
+  # settle（finish_turn）时清除。
+  @doc false
+  def cancel_requested?(troupe_name, role_id, stage_name),
+    do: :persistent_term.get({__MODULE__, :cancel, troupe_name, role_id, stage_name}, false)
+
+  defp clear_cancel(%__MODULE__{} = s) do
+    :persistent_term.erase({__MODULE__, :cancel, s.troupe.name, s.role_id, s.stage_name})
+    s
   end
 end

@@ -236,4 +236,33 @@ defmodule Troupe.TestActors do
     def visible(props), do: {:reply, :yes, props}
     def hidden(props), do: {:reply, :no, props}
   end
+
+  defmodule CancellableWorker do
+    use Troupe.Actor
+
+    def initial_props, do: %{progress: 0}
+
+    @doc "长步进 Turn：每步观察协作取消标志，置位即提前收束（返回已完成步数并提交进度）。"
+    def churn(props, max_steps) do
+      steps = churn_steps(0, max_steps)
+      {:save, steps, Map.put(props, :progress, steps)}
+    end
+
+    def churn_once(props), do: {:save, 1, Map.put(props, :progress, 1)}
+
+    def progress(props), do: {:reply, props.progress, props}
+
+    def cancel_probe(props), do: {:reply, Troupe.Actor.cancel_requested?(), props}
+
+    defp churn_steps(n, max) when n >= max, do: n
+
+    defp churn_steps(n, max) do
+      if Troupe.Actor.cancel_requested?() do
+        n
+      else
+        Process.sleep(10)
+        churn_steps(n + 1, max)
+      end
+    end
+  end
 end

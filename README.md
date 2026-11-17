@@ -109,6 +109,23 @@ TROUPE_SEEDS=a@127.0.0.1 elixir --sname b@127.0.0.1 -S mix
 * production 集群模式有**能力门禁**：非 cross-node-safe 的 store/ownership 直接拒绝组建
 * Provider 需要 `postgrex`/`jason`（用户应用侧提供；troupe 包本身零依赖）
 
+## 协作取消（advisory）
+
+```elixir
+# 方法内每步观察取消标志，自行决定收束（可提前 settle 提交部分状态）
+def churn(props, max_steps) do
+  steps = step(0, max_steps)
+  {:save, steps, Map.put(props, :progress, steps)}
+end
+defp step(n, max) when n >= max, do: n
+defp step(n, max) do
+  if Troupe.Actor.cancel_requested?(), do: n, else: (Process.sleep(10); step(n + 1, max))
+end
+```
+
+`Troupe.cancel(agent)` 置位标志：在飞/下一 Turn 内 `cancel_requested?/0` 返回 true，
+Turn settle 后自动清除。**不可强行终止**（strict Turn 内联）；外部副作用不受保护。
+
 ## 可观测
 
 ```elixir

@@ -19,7 +19,7 @@ BEAM 提供进程、监督、分布式消息等优势，但这些优势不自动
 | 领域 | 当前实现 | 剩余差距 |
 |---|---|---|
 | Lifecycle | 激活即单飞、fencing 前置、失败释放租约 | activation incarnation 可观测事件、生命周期扩展契约 |
-| 调度 | strict 串行；read_only/improv 快照并发；排队过期；UnknownOutcome | 信箱总预算背压（strict 长任务期间的内存增长测量） |
+| 调度 | strict 串行；read_only/improv 快照并发；排队过期；UnknownOutcome；**幂等键（记录随 Props 原子提交）**；**协作取消（advisory 置位/观察/settle 清除）** | 信箱总预算背压（strict 长任务期间的内存增长测量） |
 | 集群 | Erlang distribution、HashRing、erpc 转发、**入团协商 + production 门禁** | 目录/放置演进（哈希 vs 版本化目录 ADR）、真实网络分区演练 |
 | Ownership | Memory 租约 + **Postgres epoch 墓碑/DB 时钟租约**，fencing 拒绝旧写 | Redis/etcd 等其他共享 Provider（同一契约） |
 | Props | Memory/File/DETS + **Postgres（CAS+fencing 单语句）** | 版本化类型契约、Provider 生态扩展 |

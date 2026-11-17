@@ -25,7 +25,7 @@
 ## 2. 调度、投递和生命周期契约 —— 部分完成
 
 - [ ] 定义逻辑 Actor identity 与 activation incarnation 的关系，支持可观测 lifecycle。
-- [x] timeout、排队过期、UnknownOutcome（结果未知勿假定失败）已有语义与测试；远程取消/幂等重试契约待补文档。
+- [x] timeout、排队过期、UnknownOutcome（结果未知勿假定失败）语义与测试；**幂等键**（`Troupe.Actor.idempotent/4`，记录随 Props 原子提交）与**协作取消**（`Troupe.cancel/1` + `cancel_requested?/0`，advisory）已实现并入测试；远程取消的跨节点转发待统一 ADR。
 - [x] 纯函数/不可变 Props 保持；strict / read_only snapshot / improv commit 的一致性差异已用反例定义。
 - [ ] 节点级健康、租约丢失和 drain 纳入 OTP 监督策略（租约丢失当前仅 drain 该 Actor）。
 

@@ -264,6 +264,21 @@ defmodule Troupe.Actor do
   end
 
   @doc """
+  协作取消观察（advisory，对齐 troupe.cr CancelSignal）：`Troupe.cancel/1` 置位后返回
+  true。**不可强行终止**——strict Turn 内联执行，方法自行决定何时/如何收束（可提前
+  settle 提交部分状态）；当前 Turn settle 后标志自动清除。Turn 外调用恒 false。
+  """
+  def cancel_requested? do
+    case Process.get(:troupe_ctx) do
+      %{troupe_name: t, role_id: r, stage_name: s} ->
+        Troupe.ActorServer.cancel_requested?(t, r, s)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
   幂等执行（Troupe.js DESIGN §6.5）：同键同指纹重放原结果；同键异指纹抛
   `Troupe.IdempotencyConflictError`。幂等记录随 Props 原子提交——调用方负责以
   `{:save, ...}` 返回（fn 内不要落盘）。记录保留期限由业务自管（可加清理 Cue）。

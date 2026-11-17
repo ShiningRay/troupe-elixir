@@ -396,6 +396,28 @@ defmodule Troupe do
   def off(%__MODULE__{} = troupe, %Agent{} = agent),
     do: Troupe.Director.off(troupe.name, agent.role_id, agent.stage_name)
 
+  @doc """
+  请求协作取消（advisory）：置位该 Actor 的取消标志，在飞/下一 Turn 内
+  `Troupe.Actor.cancel_requested?/0` 返回 true；Turn settle 后标志自动清除。
+
+  不可强行终止——strict Turn 内联执行，方法自行观察并决定收束（可提前 settle
+  提交部分状态）。外部副作用不受保护（同 ownership 边界警示）。
+
+  置位直接写节点标志（不经 ActorServer 信箱——在飞 strict Turn 会阻塞 GenServer
+  调用，正是要取消的对象）；不在场的 Actor 置位对其下一 Turn 生效。
+  """
+  @spec cancel(Agent.t()) :: :ok
+  def cancel(%Agent{} = agent) do
+    troupe = by_name!(agent.troupe_name)
+
+    :persistent_term.put(
+      {Troupe.ActorServer, :cancel, troupe.name, agent.role_id, agent.stage_name},
+      true
+    )
+
+    :ok
+  end
+
   @doc "全体在场 Actor 下场（保存 Props）——测试清理用。"
   @spec drain_all(t(), keyword()) :: :ok
   def drain_all(troupe, opts \\ []) do

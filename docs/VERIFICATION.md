@@ -4,10 +4,10 @@
 
 ## 测试结果
 
-- `mix test`（单机）：**38 passed**——含 OTel 导出验收（span 映射/状态码/monotonic Sum/gauge/sink 闭环）——串行、生命周期、迁移、保存失败、交错、Cue 与 Show。
+- `mix test`（单机）：**41 passed**——含 OTel 导出验收（span 映射/状态码/monotonic Sum/gauge/sink 闭环）与协作取消验收（advisory 置位/Turn 内观察/部分提交/自动清除）（span 映射/状态码/monotonic Sum/gauge/sink 闭环）——串行、生命周期、迁移、保存失败、交错、Cue 与 Show。
 - `mix test`（含 PG，`TROUPE_TEST_PG`）：**43 passed**（+6，另有 1 项 improv 丢失更新反例在单机套件）——Provider 契约/CAS/fencing 拒绝、
   epoch 单调与墓碑、production 门禁、崩溃恢复、Cue claim/complete/租约过期重投（DB 时钟）。
-- `mix test`（含分布式，`TROUPE_DIST_TEST=1`）：**51 passed**（+3，双真实 BEAM 节点）——
+- `mix test`（含分布式，`TROUPE_DIST_TEST=1`）：**55 passed**（+3，双真实 BEAM 节点）——
   透明调用跨节点路由（erpc 转发 + 环放置）、production 角色不兼容 fail-fast 断连、
   dev 模式拒绝记录、节点死亡后重激活与环自愈。
 
