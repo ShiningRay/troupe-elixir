@@ -165,7 +165,11 @@ defmodule Troupe.Trace do
   @doc "最近 n 条 Trace 事件（新→旧，扫描上限 = 环大小）；filter 见 `subscribe_trace/2`。"
   @spec traces(atom(), non_neg_integer(), keyword()) :: [event()]
   def traces(troupe_name, n \\ 50, filter \\ []) do
-    [seq] = :ets.lookup(:troupe_trace_seq, :seq) |> Enum.map(&elem(&1, 1))
+    seq =
+      case :ets.lookup(:troupe_trace_seq, troupe_name) do
+        [{_, s}] -> s
+        [] -> 0
+      end
 
     seq..max(seq - @ring, 0)//-1
     |> Enum.flat_map(fn i ->
