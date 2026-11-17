@@ -27,6 +27,8 @@ jobs:
         with:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.os == 'windows-latest' && '27' || '27' }}
+      - name: Install dependencies
+        run: mix deps.get
       - name: Compile (warnings are errors)
         run: mix compile --warnings-as-errors
       - name: Run test suite
@@ -57,6 +59,8 @@ jobs:
         with:
           elixir-version: "1.18"
           otp-version: "27"
+      - name: Install dependencies
+        run: mix deps.get
       # skip 即失败纪律：PG leg 必须真正执行 PG 测试，环境缺失即红
       - name: PG leg gate (skip is failure)
         run: |
@@ -91,6 +95,8 @@ jobs:
         with:
           elixir-version: "1.18"
           otp-version: "27"
+      - name: Install dependencies
+        run: mix deps.get
       # skip 即失败纪律：分布式 leg 必须真正执行双节点测试
       - name: Distributed leg gate (skip is failure)
         run: |
