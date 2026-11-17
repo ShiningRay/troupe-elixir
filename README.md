@@ -119,6 +119,20 @@ Troupe.Director.inspect(troupe.name, "Cart", "user-123")   # Props 快照
 Troupe.Director.off(troupe.name, "Cart", "user-123")       # 强制下场
 ```
 
+### OTel 导出（OTLP JSON v1）
+
+```elixir
+stop =
+  Troupe.OTel.attach_exporter(troupe, fn
+    :trace, json -> http_post("http://collector:4318/v1/traces", json)   # 传输由宿主实现
+    :metrics, json -> http_post("http://collector:4318/v1/metrics", json)
+  end,
+  every_ms: 10_000)
+```
+
+Trace 事件 → span（W3C traceparent 可选解析；outcome → status）、每角色计数 →
+monotonic Sum、延迟分位 → gauge。JSON 编码零依赖（OTP 27+ 内置 `:json`，或用户侧 Jason）。
+
 CLI：`mix troupe.status --node a@host`、`mix troupe.ps`、`mix troupe.inspect Cart user-123`、
 `mix troupe.call Cart user-123 peek '[]'`、`mix troupe.ring` 等（需与目标节点共享 cookie）。
 

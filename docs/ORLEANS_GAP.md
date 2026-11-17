@@ -25,7 +25,7 @@ BEAM 提供进程、监督、分布式消息等优势，但这些优势不自动
 | Props | Memory/File/DETS + **Postgres（CAS+fencing 单语句）** | 版本化类型契约、Provider 生态扩展 |
 | Cue | Memory/DETS + **Postgres（SKIP LOCKED claim、DB 时钟重投）** | 归属过滤（跨节点按环过滤）、批量 claim |
 | Show | `:pg` 实时扇出（明确定位尽力通知） | 持久事件、离线订阅恢复、游标/重放（独立设计，不复用 `:pg`） |
-| 观测 | Metrics、Trace、Director/CLI、CI（矩阵+PG+分布式 leg） | OTel/W3C trace、Booth、持久集群视图 |
+| 观测 | Metrics、Trace、Director/CLI、**OTel OTLP JSON 导出（零依赖 sink）**、CI（矩阵+PG+分布式 leg） | W3C traceparent 传播接线、Booth、持久集群视图 |
 | 高级模块 | 未实现 | persistent streams、extensions、transactions、event sourcing 不应由幂等/CAS 冒充 |
 
 ## 已闭环（原 Issues）

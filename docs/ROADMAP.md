@@ -48,5 +48,6 @@
 
 ## 5. 后续运维与高级模块
 
-- [ ] OTel/W3C trace、Booth、发布/回滚和协议兼容矩阵。
+- [x] OTel OTLP JSON v1 导出（零依赖 sink 回调，`Troupe.OTel`，对齐 troupe.cr M6/trouperb）；W3C traceparent 传播接线待统一 ADR。
+- [ ] Booth、发布/回滚和协议兼容矩阵。
 - [ ] 可靠 Outbox 后再评估事件溯源与分布式事务；不由 CAS 推导 ACID 跨 Actor 事务。
