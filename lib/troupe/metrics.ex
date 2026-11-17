@@ -131,16 +131,14 @@ defmodule Troupe.Trace do
 
   @doc false
   def call(troupe_name, data) do
-    {seq, ts} = next()
-    event = Map.merge(data, %{seq: seq, ts: ts, troupe: troupe_name})
-    :ets.insert(:troupe_trace_ring, {{troupe_name, seq}, event})
+    # per-troupe 序号：并发 troupe 互不挤占扫描窗口（全局 seq 会让调用洪流
+    # 把其他 troupe 的旧事件挤出 traces/3 的回扫范围）
+    idx = :ets.update_counter(:troupe_trace_seq, troupe_name, 1, {troupe_name, 0})
+    ts = System.system_time(:millisecond)
+    event = Map.merge(data, %{seq: idx, ts: ts, troupe: troupe_name})
+    :ets.insert(:troupe_trace_ring, {{troupe_name, idx}, event})
     fanout(event)
     :ok
-  end
-
-  defp next do
-    idx = :ets.update_counter(:troupe_trace_seq, :seq, 1, {:seq, 0})
-    {idx, System.system_time(:millisecond)}
   end
 
   defp fanout(event) do
@@ -196,7 +194,8 @@ defmodule Troupe.Trace do
 
   @doc false
   def event(troupe_name, kind, detail) do
-    {seq, ts} = next()
+    seq = :ets.update_counter(:troupe_trace_seq, troupe_name, 1, {troupe_name, 0})
+    ts = System.system_time(:millisecond)
 
     e = %{
       seq: seq,
