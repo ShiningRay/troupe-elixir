@@ -1,6 +1,6 @@
 # Troupe for Elixir 与 Orleans 的能力差距
 
-> 对标 Orleans 10.0；统一规划：[troupe-planning](https://github.com/ShiningRay/troupe-planning)。
+> 对标 Orleans 10.0；统一规划：[troupe-planning](https://github.com/ShiningRay/troupe)。
 
 ## 当前定位
 
