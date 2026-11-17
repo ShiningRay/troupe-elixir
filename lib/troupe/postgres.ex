@@ -69,9 +69,12 @@ defmodule Troupe.PropStore.Postgres do
     %{conn: nil, opts: opts}
   end
 
-  # Troupe.PropStore.resolve 传 troupe_name 时调用（本 Provider 需要查连接）
+  # Troupe.PropStore.resolve 传 troupe_name 时调用（本 Provider 需要查连接）。
+  # resolve 发生在监督树启动后——连接已就绪，顺手幂等建表（开箱即用，trouperb open 同语义）。
   def init(_opts, troupe_name) do
-    %{conn: Troupe.Names.lookup!(troupe_name, :pg_conn), opts: []}
+    ctx = %{conn: Troupe.Names.lookup!(troupe_name, :pg_conn), opts: []}
+    ensure_schema(ctx)
+    ctx
   end
 
   @impl Troupe.PropStore
